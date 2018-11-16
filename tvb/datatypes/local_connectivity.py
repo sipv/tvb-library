@@ -62,6 +62,21 @@ class LocalConnectivity(types_mapped.MappedType):
         doc="Distance at which to truncate the evaluation in mm.",
         order=3)
 
+    scale_by_area = basic.Bool(
+        label="Scale by area",
+        default=False,
+        required=False,
+        doc="Scale the local connectivity matrix by the area of vertices.",
+        order=4)
+
+    homogenize = basic.Bool(
+        label="Homogenize spatial discretization effects.",
+        default=True,
+        required=False,
+        doc="""If True (default), the connectivity is scaled so that the total
+               contribution (positive and negative) to all vertices is equal.""",
+        order=5)
+
     def compute(self):
         """
         Compute current Matrix.
@@ -74,44 +89,53 @@ class LocalConnectivity(types_mapped.MappedType):
         #Then replace original data with result...
         self.matrix_gdist.data = self.equation.pattern
 
-        #Homogenise spatial discretisation effects across the surface
-        nv = self.matrix_gdist.shape[0]
-        ind = numpy.arange(nv, dtype=int)
-        pos_mask = self.matrix_gdist.data > 0.0
-        neg_mask = self.matrix_gdist.data < 0.0
-        pos_con = self.matrix_gdist.copy()
-        neg_con = self.matrix_gdist.copy()
-        pos_con.data[neg_mask] = 0.0
-        neg_con.data[pos_mask] = 0.0
-        pos_contrib = pos_con.sum(axis=1)
-        pos_contrib = numpy.array(pos_contrib).squeeze()
-        neg_contrib = neg_con.sum(axis=1)
-        neg_contrib = numpy.array(neg_contrib).squeeze()
-        pos_mean = pos_contrib.mean()
-        neg_mean = neg_contrib.mean()
-        if ((pos_mean != 0.0 and any(pos_contrib == 0.0)) or
-                (neg_mean != 0.0 and any(neg_contrib == 0.0))):
-            msg = "Cortical mesh is too coarse for requested LocalConnectivity."
-            LOG.warning(msg)
-            bad_verts = ()
-            if pos_mean != 0.0:
-                bad_verts = bad_verts + numpy.nonzero(pos_contrib == 0.0)
-            if neg_mean != 0.0:
-                bad_verts = bad_verts + numpy.nonzero(neg_contrib == 0.0)
-            LOG.debug("Problem vertices are: %s" % str(bad_verts))
-        pos_hf = numpy.zeros(shape=pos_contrib.shape)
-        pos_hf[pos_contrib != 0] = pos_mean / pos_contrib[pos_contrib != 0]
-        neg_hf = numpy.zeros(shape=neg_contrib.shape)
-        neg_hf[neg_contrib != 0] = neg_mean / neg_contrib[neg_contrib != 0]
-        pos_hf_diag = scipy.sparse.csc_matrix((pos_hf, (ind, ind)), shape=(nv, nv))
-        neg_hf_diag = scipy.sparse.csc_matrix((neg_hf, (ind, ind)), shape=(nv, nv))
-        homogenious_conn = (pos_hf_diag * pos_con) + (neg_hf_diag * neg_con)
+        if self.scale_by_area:
+            area_mtx = scipy.sparse.diags(self.surface.vertex_areas)
+            self.matrix_gdist = self.matrix_gdist * area_mtx
 
-        #Then replace unhomogenised result with the spatially homogeneous one...
-        if not homogenious_conn.has_sorted_indices:
-            homogenious_conn.sort_indices()
 
-        self.matrix = homogenious_conn
+        if self.homogenize:
+            nv = self.matrix_gdist.shape[0]
+            ind = numpy.arange(nv, dtype=int)
+            pos_mask = self.matrix_gdist.data > 0.0
+            neg_mask = self.matrix_gdist.data < 0.0
+            pos_con = self.matrix_gdist.copy()
+            neg_con = self.matrix_gdist.copy()
+            pos_con.data[neg_mask] = 0.0
+            neg_con.data[pos_mask] = 0.0
+            pos_contrib = pos_con.sum(axis=1)
+            pos_contrib = numpy.array(pos_contrib).squeeze()
+            neg_contrib = neg_con.sum(axis=1)
+            neg_contrib = numpy.array(neg_contrib).squeeze()
+            pos_mean = pos_contrib.mean()
+            neg_mean = neg_contrib.mean()
+            if ((pos_mean != 0.0 and any(pos_contrib == 0.0)) or
+                    (neg_mean != 0.0 and any(neg_contrib == 0.0))):
+                msg = "Cortical mesh is too coarse for requested LocalConnectivity."
+                LOG.warning(msg)
+                bad_verts = ()
+                if pos_mean != 0.0:
+                    bad_verts = bad_verts + numpy.nonzero(pos_contrib == 0.0)
+                if neg_mean != 0.0:
+                    bad_verts = bad_verts + numpy.nonzero(neg_contrib == 0.0)
+                LOG.debug("Problem vertices are: %s" % str(bad_verts))
+            pos_hf = numpy.zeros(shape=pos_contrib.shape)
+            pos_hf[pos_contrib != 0] = pos_mean / pos_contrib[pos_contrib != 0]
+            neg_hf = numpy.zeros(shape=neg_contrib.shape)
+            neg_hf[neg_contrib != 0] = neg_mean / neg_contrib[neg_contrib != 0]
+            pos_hf_diag = scipy.sparse.csc_matrix((pos_hf, (ind, ind)), shape=(nv, nv))
+            neg_hf_diag = scipy.sparse.csc_matrix((neg_hf, (ind, ind)), shape=(nv, nv))
+            homogenious_conn = (pos_hf_diag * pos_con) + (neg_hf_diag * neg_con)
+
+            #Then replace unhomogenised result with the spatially homogeneous one...
+            if not homogenious_conn.has_sorted_indices:
+                homogenious_conn.sort_indices()
+
+            self.matrix = homogenious_conn
+
+        else:
+            self.matrix = self.matrix_gdist.tocsr()
+
 
     def _validate_before_store(self):
         """

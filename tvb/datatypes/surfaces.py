@@ -267,6 +267,7 @@ class Surface(MappedType):
     # from scientific surfaces
     _vertex_neighbours = None
     _vertex_triangles = None
+    _vertex_areas = None
     _triangle_centres = None
     _triangle_angles = None
     _triangle_areas = None
@@ -483,6 +484,23 @@ class Surface(MappedType):
             self.logger.warn(" %d vertices have bad normals" % bad_normal_count)
         util.log_debug_array(LOG, vert_norms, "vertex_normals", owner=self.__class__.__name__)
         self.vertex_normals = vert_norms
+
+
+    @property
+    def vertex_areas(self):
+        """An array specifying the area belonging to the vertices of a surface."""
+        if self._vertex_areas is None:
+            self._vertex_areas  = self._find_vertex_areas()
+        return self._vertex_areas
+
+    def _find_vertex_areas(self):
+        """Calculates the area belonging to the vertices of a surface."""
+        vertex_areas = numpy.zeros(self.number_of_vertices)
+        for i, triangle in enumerate(self.triangles):
+            nverts = len(triangle) # This should always be 3 - it is a triangle afterall.
+            for j in triangle:
+                vertex_areas[j] += self.triangle_areas[i]/nverts
+        return vertex_areas
 
     @property
     def triangle_areas(self):
