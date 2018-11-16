@@ -434,41 +434,49 @@ class Simulator(core.Type):
         rng = numpy.random
         if hasattr(self.integrator, 'noise'):
             rng = self.integrator.noise.random_stream
+
+        if self.surface is None:
+            good_history_shape = self.good_history_shape
+        else:
+            n_time, n_svar, n_node, n_mode = self.good_history_shape
+            good_history_shape = (n_time, n_svar, self.number_of_nodes, n_mode)
+
         # Default initial conditions
         if initial_conditions is None:
-            n_time, n_svar, n_node, n_mode = self.good_history_shape
-            LOG.info('Preparing initial history of shape %r using model.initial()', self.good_history_shape)
-            if self.surface is not None:
-                n_node = self.number_of_nodes
-            history = self.model.initial(self.integrator.dt, (n_time, n_svar, n_node, n_mode), rng)
+            LOG.info('Preparing initial history of shape %r using model.initial()', good_history_shape)
+            history = self.model.initial(self.integrator.dt, good_history_shape, rng)
         # ICs provided
         else:
             # history should be [timepoints, state_variables, nodes, modes]
             LOG.info('Using provided initial history of shape %r', initial_conditions.shape)
-            n_time, n_svar, n_node, n_mode = ic_shape = initial_conditions.shape
-            nr = self.connectivity.number_of_regions
-            if self.surface is not None and n_node == nr:
+            ic_shape = initial_conditions.shape
+
+            if self.surface is not None and ic_shape[2] == self.connectivity.number_of_regions:
+                # Surface based simulations, IC given for regions
+                # IC will be reshaped for nodes
                 initial_conditions = initial_conditions[:, :, self._regmap]
                 return self._configure_history(initial_conditions)
-            elif ic_shape[1:] != self.good_history_shape[1:]:
+
+            if ic_shape[1:] != good_history_shape[1:]:
                 raise ValueError("Incorrect history sample shape %s, expected %s"
-                                 % ic_shape[1:], self.good_history_shape[1:])
+                                 % (ic_shape[1:], good_history_shape[1:]))
+
+            if ic_shape[0] >= self.horizon:
+                LOG.debug("Using last %d time-steps for history.", self.horizon)
+                history = initial_conditions[-self.horizon:, :, :, :].copy()
             else:
-                if ic_shape[0] >= self.horizon:
-                    LOG.debug("Using last %d time-steps for history.", self.horizon)
-                    history = initial_conditions[-self.horizon:, :, :, :].copy()
-                else:
-                    LOG.debug('Padding initial conditions with model.initial')
-                    history = self.model.initial(self.integrator.dt, self.good_history_shape, rng)
-                    shift = self.current_step % self.horizon
-                    history = numpy.roll(history, -shift, axis=0)
-                    history[:ic_shape[0], :, :, :] = initial_conditions
-                    history = numpy.roll(history, shift, axis=0)
-                self.current_step += ic_shape[0] - 1
+                LOG.debug('Padding initial conditions with model.initial')
+                history = self.model.initial(self.integrator.dt, good_history_shape, rng)
+                shift = self.current_step % self.horizon
+                history = numpy.roll(history, -shift, axis=0)
+                history[:ic_shape[0], :, :, :] = initial_conditions
+                history = numpy.roll(history, shift, axis=0)
+            self.current_step += ic_shape[0] - 1
+
         LOG.info('Final initial history shape is %r', history.shape)
         # create initial state from history
         self.current_state = history[self.current_step % self.horizon].copy()
-        LOG.debug('initial state has shape %r' % (self.current_state.shape, ))
+        LOG.debug('initial state has shape %r' % (self.current_state.shape,))
         if self.surface is not None and history.shape[2] > self.connectivity.number_of_regions:
             n_reg = self.connectivity.number_of_regions
             (nt, ns, _, nm), ax = history.shape, (2, 0, 1, 3)
